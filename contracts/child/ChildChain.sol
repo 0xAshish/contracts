@@ -132,7 +132,7 @@ contract ChildChain is Ownable {
 
     // check if child token is mapped
     require(childToken != address(0x0));
-    
+
     ChildToken obj;
 
     if (isERC721[rootToken]) {
