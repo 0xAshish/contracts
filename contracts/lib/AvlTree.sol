@@ -1,180 +1,166 @@
 pragma solidity ^0.4.24;
 
 import { Math } from "openzeppelin-solidity/contracts/math/Math.sol";
-pragma solidity ^0.4.24;
 
 
 contract AvlTree {
-  struct node {
+  struct Node {
     uint256 value;
     uint256 left;
     uint256 right;
-	uint256 height;
+    uint256 height;
   }
   
-  node[] tree; 
-  uint256 root = 0;
-    event order(uint256 value);
+  Node[] private tree; 
+  uint256 private root = 0;
+  
   constructor() public {
-		tree.push(node(0,0,0,0));
+		
+    // NULL PTR node 
+    tree.push(Node({
+      value : 0,
+      left : 0,
+      right : 0,
+      height : 0
+      } ));
+    root = 1;
   }
-  
-  // function max256(uint256 a, uint256 b) private pure returns (uint256) { 
-  //     if(a>b) return a;
-  //     return b;
-  // }
 
-  function getHeight(uint256 n) public {
-    if(n>0){ 
-	tree[n].height = 1 + Math.max256(tree[tree[n].left].height, tree[tree[n].right].height);
+  function getHeight(uint256 n) private {
+    if (n > 0) { 
+      tree[n].height = 1 + Math.max256(tree[tree[n].left].height, tree[tree[n].right].height);
     }
   }
 
+  function search(uint256 _root, uint256 value) public returns (bool) {
+    if (_root == 0 || value == 0) {  // add correct condition solidity
+      return false;// return true/false !? ;-)
+    }
 
+    // assembly switch case ?
+    if (tree[_root].value == value) {
+      return true;
+    }
 
-function search(uint256 n, uint256 value) public returns(bool){
-	if (n == 0 || value == 0) {  // add correct condition solidity
-			return false;// return true/false !? ;-)
-	}
+    if (value < tree[_root].value) {
+      return search(tree[_root].left, value);
+    }
+    else {
+      return search(tree[_root].right, value);
+    }
+  }
 
-	if (tree[n].value == value) {
-		return true;
-	}
-
-	if (value < tree[n].value){
-		return search(tree[n].left, value);
-	}
-	else{
-		return search(tree[n].right, value);
-	}
-
-}
-
-function insertValue(uint256 value) public returns(uint256) {
+  function insertValue(uint256 value) public returns (uint256) {
     require(value > 0);
-    if(root == 0){
-        tree.push(node({
-            value:value,
-            left:0,
-            right:0,
-            height:0
-        }));
-        root = 1;
-        return tree.length;
-    }
     root =  insert(root,value);
     return root;
-}
+  }
 
-function insert(uint256 n, uint256 value) private returns(uint256){
-		if (n == 0) {
-			tree.push(node({
-			    value:value,
-			    left:0,
-			    right:0,
-			    height:1
-			}));
-			return (tree.length - 1);
-		}
+  function insert(uint256 _root, uint256 value) private returns (uint256) {
+    if (_root == 0) {
+      tree.push(node({
+        value:value,
+        left:0,
+        right:0,
+        height:1
+      }));
+      return (tree.length - 1);
+    }
 
-		if (value <= tree[n].value) {
-			 tree[n].left = insert(tree[n].left, value);
-		}
-		else {
-			tree[n].right = insert(tree[n].right, value);
-		}
-		return balance(n);
-}
+    if (value <= tree[_root].value) {
+      tree[_root].left = insert(tree[_root].left, value);
+    }
+    else {
+      tree[_root].right = insert(tree[_root].right, value);
+    }
+    return balance(_root);
+  }
 
-// function deleteNode(node n, uint256 value) returns(node){
-// 		ndoe temp;
-// 		if (n == NIL) {
-// 			return n;
-// 		}
-// 		if (n.value == value)
-// 		{
-// 			if (n.left == NIL || n.right == NIL)
-// 			{
-// 				if (n.left == NIL){
-// 					 temp = n.right;
-// 				}
-// 				else{
-// 					 temp = n.left;
-// 				}
-// 				delete n;
-// 				return temp;
-// 			}
-// 			else
-// 			{
-// 				for (temp = n.right; temp.left != NIL; temp = temp.left);
-// 				n.value = temp.value;
-// 				n.right = deleteNode(n.right, temp.value);
-// 				return Balance(n);
-// 			}
-// 		}
+  function deleteNode(uint256 value) public returns(uint256) {
+    require(value > 0);
+    return _deleteNode(root, value);
+  }
 
-// 		if (value < n.value) n.left = Delete(n.left, value);
-// 		else n.right = Delete(n.right, value);
+  function _deleteNode(uint256 _root, uint256 value) private returns (uint256) {
+    uint256 temp;
+    if (_root == 0) {
+      return _root;
+    }
+    if (tree[_root].value == value) {
+      if (tree[_root].left == 0 || tree[_root].right == 0) {
+        if (tree[_root].left == 0) {
+          temp = tree[_root].right;
+        }
+        else {
+          temp = tree[_root].left;
+        }
+        return temp;
+      }
+      else {
+        for (temp = tree[_root].right; tree[temp].left != 0; temp = tree[temp].left){}
+        tree[n].value = tree[temp].value;
+        tree[n].right = deleteNode(tree[n].right, tree[temp].value);
+        return balance(_root);
+  		}
+  	}
 
-// 		return Balance(n);
-// }
-function rotateLeft(uint256 n) private returns (uint256 )  {
-		uint256 temp = tree[n].left;
-		tree[n].left = tree[temp].right;
-		tree[temp].right = n;
-		getHeight(n);
-		getHeight(temp);
+    if (value < tree[n].value) {
+      tree[n].left = deleteNode(tree[n].left, value);
+    }
+    else {
+      tree[n].right = deleteNode(tree[n].right, value);
+    }
 
-		return temp;
-}
+    return balance(_root);
+  }
 
-function rotateRight (uint256 n) private returns (uint256) {
-		uint256 temp = tree[n].right;
-		tree[n].right = tree[temp].left;
-		tree[temp].left = n;
-		getHeight(n);
-		getHeight(temp);
+  function rotateLeft(uint256 _root) private returns (uint256)  {
+    uint256 temp = tree[_root].left;
+    tree[_root].left = tree[temp].right;
+    tree[temp].right = _root;
+    getHeight(_root);
+    getHeight(temp);
+    return temp;
+  }
 
-		return temp;
-}
+  function rotateRight (uint256 _root) private returns (uint256) {
+    uint256 temp = tree[_root].right;
+    tree[_root].right = tree[temp].left;
+    tree[temp].left = _root;
+    getHeight(_root);
+    getHeight(temp);
+    return temp;
+  }
 
-// temp helper function 
-function getChilds(uint256 index) public view  returns(uint256 left, uint256 right) {
+  // temp helper function 
+  function getChilds(uint256 index) public view  returns(uint256 left, uint256 right) {
     left = tree[index].left;
     right = tree[index].right;
-}
+  }
 
-// temp helper function
-function getTree() public view returns(uint256[]) {
-    uint256[] memory _tree = new uint256[](tree.length);
-    for(uint256 i=0;i<tree.length;i++){
-        _tree[i] = tree[i].value;
+  // // temp helper function
+  // function getTree() public view returns(uint256[]) {
+  //     uint256[] memory _tree = new uint256[](tree.length);
+  //     for(uint256 i=0;i<tree.length;i++){
+  //         _tree[i] = tree[i].value;
+  //     }
+  //     return _tree;
+  // }
+
+
+  function balance(uint256 _root) private returns (uint256) { 
+    getHeight(_root);
+    if (tree[tree[_root].left].height > tree[tree[_root].right].height + 1) {		
+      if (tree[tree[tree[_root].left].right].height > tree[tree[tree[_root].left].left].height) {
+        tree[_root].left = rotateRight(tree[_root].left);
+      }
+      return rotateLeft(_root);
+    } else if (tree[tree[_root].right].height > tree[tree[_root].left].height + 1) {
+      if (tree[tree[tree[_root].right].left].height > tree[tree[tree[_root].right].right].height) {
+        tree[_root].right = rotateLeft(tree[_root].right);
+      }
+      return rotateRight(_root);
     }
-    return _tree;
-}
-
-
-function balance(uint256 n) private returns (uint256){ 
-		getHeight(n);
-		if (tree[tree[n].left].height > tree[tree[n].right].height + 1)
-		{		
-			if (tree[tree[tree[n].left].right].height > tree[tree[tree[n].left].left].height){
-				tree[n].left = rotateRight(tree[n].left);
-			}
-			n = rotateLeft(n);
-		}
-		else
-		if (tree[tree[n].right].height > tree[tree[n].left].height + 1)
-		{
-			if (tree[tree[tree[n].right].left].height > tree[tree[tree[n].right].right].height){
-				tree[n].right = rotateLeft(tree[n].right);
-		}
-			n = rotateRight(n);
-		}
-		return n;
-}
-
+  }
 
 }
-
-
