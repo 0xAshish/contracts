@@ -72,23 +72,19 @@ contract StakeManager is StakeManagerInterface, RootChainable, Lockable {
   }
 
   // TODO: need better random function 
-  function getNRandomValidator(uint256 _n, uint256 n) public view returns (address[]) {
+  // Fisher–Yates shuffle/ Knuth shuffle
+  function getNRandomValidator(uint256 _n ,uint256 n) public view returns (address[]) {
     address[] memory RandValidators = new address[](_n);
-    bool[] memory set = new bool[](n);
     uint256 seed1 = uint256(keccak256(abi.encodePacked(block.difficulty + block.number)));
     uint256 blockN = uint256(blockhash(seed1 % block.number));
     uint256 seed2 = uint256(keccak256(abi.encodePacked(blockN)));
     
     uint256 currentRand = 1;
-    for(uint256 i=0;i<_n;) {
-        currentRand = (seed1*currentRand + seed2)%n;
-        if (set[currentRand] == false) {
-            RandValidators[i] = currentRand;`
-            set[currentRand] = true; 
-            i++;
-        } else {
-            seed2 = seed2 + currentRand;
-        }
+    for(uint256 i = 0; i < _n;) {
+      currentRand = (seed1*currentRand + seed2)%n;
+      RandValidators[i] = queue.getByIndex(currentRand);
+      i++;
+      n--;
     }
     return RandValidators;
   }
@@ -151,6 +147,7 @@ contract StakeManager is StakeManagerInterface, RootChainable, Lockable {
         queue.push(validator); // add them to next validator set
       }
     }
+    
     delete currentValidatorSet;
     currentValidatorSet = nextValidatorSet;
     nextValidatorSet = getNRandomValidator();
