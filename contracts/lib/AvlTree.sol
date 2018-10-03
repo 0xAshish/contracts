@@ -2,7 +2,9 @@ pragma solidity ^0.4.24;
 
 import { Math } from "openzeppelin-solidity/contracts/math/Math.sol";
 
-
+// TODO:
+// load in memory and do balancing and rewrite tree 
+// with just minimum writes can be better 
 contract AvlTree {
   struct Node {
     uint256 value;
@@ -23,16 +25,20 @@ contract AvlTree {
       right : 0,
       height : 0
       } ));
-    root = 1;
+    root = 0;
   }
 
-  function getHeight(uint256 n) private {
-    if (n > 0) { 
-      tree[n].height = 1 + Math.max256(tree[tree[n].left].height, tree[tree[n].right].height);
+  function getHeight(uint256 _root) private {
+    if (_root > 0) { 
+      tree[_root].height = 1 + Math.max256(tree[tree[_root].left].height, tree[tree[_root].right].height);
     }
   }
 
-  function search(uint256 _root, uint256 value) public returns (bool) {
+  function search(uint256 value) public returns(bool) {
+    return _search(root, value);
+  }
+
+  function _search(uint256 _root, uint256 value) private returns (bool) {
     if (_root == 0 || value == 0) {  // add correct condition solidity
       return false;// return true/false !? ;-)
     }
@@ -43,10 +49,10 @@ contract AvlTree {
     }
 
     if (value < tree[_root].value) {
-      return search(tree[_root].left, value);
+      return _search(tree[_root].left, value);
     }
     else {
-      return search(tree[_root].right, value);
+      return _search(tree[_root].right, value);
     }
   }
 
@@ -58,7 +64,7 @@ contract AvlTree {
 
   function insert(uint256 _root, uint256 value) private returns (uint256) {
     if (_root == 0) {
-      tree.push(node({
+      tree.push(Node({
         value:value,
         left:0,
         right:0,
@@ -98,17 +104,17 @@ contract AvlTree {
       }
       else {
         for (temp = tree[_root].right; tree[temp].left != 0; temp = tree[temp].left){}
-        tree[n].value = tree[temp].value;
-        tree[n].right = deleteNode(tree[n].right, tree[temp].value);
+        tree[_root].value = tree[temp].value;
+        tree[_root].right = _deleteNode(tree[_root].right, tree[temp].value);
         return balance(_root);
   		}
   	}
 
-    if (value < tree[n].value) {
-      tree[n].left = deleteNode(tree[n].left, value);
+    if (value < tree[_root].value) {
+      tree[_root].left = _deleteNode(tree[_root].left, value);
     }
     else {
-      tree[n].right = deleteNode(tree[n].right, value);
+      tree[_root].right = _deleteNode(tree[_root].right, value);
     }
 
     return balance(_root);
@@ -138,15 +144,18 @@ contract AvlTree {
     right = tree[index].right;
   }
 
-  // // temp helper function
-  // function getTree() public view returns(uint256[]) {
-  //     uint256[] memory _tree = new uint256[](tree.length);
-  //     for(uint256 i=0;i<tree.length;i++){
-  //         _tree[i] = tree[i].value;
-  //     }
-  //     return _tree;
-  // }
+  // temp helper function
+  function getTree() public view returns(uint256[]) {
+      uint256[] memory _tree = new uint256[](tree.length);
+      for(uint256 i=0;i<tree.length;i++){
+          _tree[i] = tree[i].value;
+      }
+      return _tree;
+  }
 
+  function getRoot() public view returns(uint256) {
+    return tree[root].value;
+  }
 
   function balance(uint256 _root) private returns (uint256) { 
     getHeight(_root);
