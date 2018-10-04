@@ -20,20 +20,42 @@ contract('AvlTree', async function() {
   })
 
   it('should initialize properly', async function() {
-    await avlTree.getRoot().should.equal(0)
-    
-    await avlTree.insertValue(50)
-    await avlTree.insertValue(40)
-    out = await avlTree.getRoot()
-    console.log(out)
+    // root should be NULL/0 
+    // let out = web3.BigNumber(await avlTree.getRoot())
+    // assert.equal(new web3.BigNumber(0), out)
+    // await avlTree.getRoot().should.eventually.equal(0)
 
+    // await avlTree.insertValue(50)
+    // await avlTree.getRoot().should.eventually.equal(50)
     // await avlTree.search(50).should.equal(true)
   })
 
-  // it('should not allow to withdraw more than amount', async function() {
-  //   await childToken.withdraw(web3.toWei(11)).should.be.rejected
-  // })
+  it('should set root correct and balanced', async function() {
+    let array = [14, 17, 11, 7, 53, 4]
+    // let p = Promise[]
+    // for(let i = 0;i < array.length; i++) {
+    //   await avlTree.insertValue(array[i])
+    // }
+    await avlTree.insertValue(14)
+    await avlTree.insertValue(17)
+    await avlTree.insertValue(11)
+    await avlTree.insertValue(7)
+    await avlTree.insertValue(53)
+    await avlTree.insertValue(4)
+
+    // await promise.all(p)
+    let x = await avlTree.getRoot()
+    console.log(x)
+    // await avlTree.getRoot().should.eventually.equal(14)
+    await avlTree.insertValue(13)
+
+    await avlTree.getRoot()
+    console.log(x)
+    // await avlTree.getRoot().should.equal()
+    // console.log(await avlTree.getRoot())
+    })
 
 
  
 })
+
