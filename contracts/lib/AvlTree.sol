@@ -1,3 +1,4 @@
+
 pragma solidity ^0.4.24;
 
 import { Math } from "openzeppelin-solidity/contracts/math/Math.sol";
@@ -5,6 +6,7 @@ import { Math } from "openzeppelin-solidity/contracts/math/Math.sol";
 // TODO:
 // load in memory and do balancing and rewrite tree 
 // with just minimum writes can be better 
+// deleteNode leaves hole in array :D 
 contract AvlTree {
   struct Node {
     uint256 value;
@@ -27,6 +29,7 @@ contract AvlTree {
       } ));
     root = 0;
   }
+    
 
   function getHeight(uint256 _root) private {
     if (_root > 0) { 
@@ -58,7 +61,7 @@ contract AvlTree {
 
   function insertValue(uint256 value) public returns (uint256) {
     require(value > 0);
-    root =  insert(root,value);
+    root = insert(root,value);
     return root;
   }
 
@@ -84,7 +87,8 @@ contract AvlTree {
 
   function deleteNode(uint256 value) public returns(uint256) {
     require(value > 0);
-    return _deleteNode(root, value);
+    root = _deleteNode(root, value);
+    return root;
   }
 
   function _deleteNode(uint256 _root, uint256 value) private returns (uint256) {
@@ -105,6 +109,7 @@ contract AvlTree {
       else {
         for (temp = tree[_root].right; tree[temp].left != 0; temp = tree[temp].left){}
         tree[_root].value = tree[temp].value;
+        tree[temp] = tree[0];
         tree[_root].right = _deleteNode(tree[_root].right, tree[temp].value);
         return balance(_root);
   		}
@@ -146,11 +151,11 @@ contract AvlTree {
 
   // temp helper function
   function getTree() public view returns(uint256[]) {
-      uint256[] memory _tree = new uint256[](tree.length);
-      for(uint256 i=0;i<tree.length;i++){
-          _tree[i] = tree[i].value;
-      }
-      return _tree;
+    uint256[] memory _tree = new uint256[](tree.length);
+    for (uint256 i = 0;i < tree.length;i++) {
+      _tree[i] = tree[i].value;
+    }
+    return _tree;
   }
 
   function getRoot() public view returns(uint256) {
@@ -170,6 +175,7 @@ contract AvlTree {
       }
       return rotateRight(_root);
     }
+    return _root;
   }
 
 }
