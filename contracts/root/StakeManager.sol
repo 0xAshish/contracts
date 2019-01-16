@@ -3,64 +3,76 @@ pragma solidity ^0.4.24;
 
 import { ERC20 } from "openzeppelin-solidity/contracts/token/ERC20/ERC20.sol";
 import { SafeMath } from "openzeppelin-solidity/contracts/math/SafeMath.sol";
+import { Math } from "openzeppelin-solidity/contracts/math/Math.sol";
 
-import { ECVerify } from "../lib/ECVerify.sol";
+
+import { AvlTree } from "../lib/AvlTree.sol";
 import { BytesLib } from "../lib/BytesLib.sol";
-import { PriorityQueue } from "../lib/PriorityQueue.sol";
+import { ECVerify } from "../lib/ECVerify.sol";
+
 
 import { Lockable } from "../mixin/Lockable.sol";
 import { RootChainable } from "../mixin/RootChainable.sol";
 
 import { StakeManagerInterface } from "./StakeManagerInterface.sol";
 import { RootChain } from "./RootChain.sol";
-import { ValidatorSet } from "./ValidatorSet.sol"; 
 
 
 contract StakeManager is StakeManagerInterface, RootChainable, Lockable {
   using SafeMath for uint256;
-  using SafeMath for uint8;
+  using SafeMath for uint128;
   using ECVerify for bytes32;
 
-  PriorityQueue stakeQueue;
-  ValidatorSet validatorSet;
 
-  ERC20 public tokenObj;
+  uint96 MAX_UINT96 = (2**96)-1; //Todo: replace with erc20 token max value
+
+  ERC20 public token;
 
   event ThresholdChange(uint256 newThreshold, uint256 oldThreshold);
-  //optional event to ack unstaking
-  event UnstakeInit(address indexed user, uint256 amount, uint256 total, bytes data); 
-  event NewValidatorSet(uint256 validatorThreshold, uint256 totalPower, bytes data);
+  event DynastyValueChange(uint256 newDynasty, uint256 oldDynasty);
 
-  uint256 public _validatorThreshold = 0;
-  uint256 public totalStake = 0;
+  // optional event to ack unstaking
+  event UnstakeInit(address indexed user, uint256 indexed amount, uint256 indexed deactivationEpoch);
+
+  // signer changed
+  event SignerChange(address indexed validator, address indexed newSigner, address indexed oldSigner);
+
+  // genesis/governance variables
+  uint256 public dynasty = 2**13;  // unit: epoch
+  uint256 public MIN_DEPOSIT_SIZE = (10**18);  // in ERC20 token
+  uint256 public EPOCH_LENGTH = 256; // unit : block
+  uint256 public WITHDRAWAL_DELAY = dynasty.div(2); // unit: epoch
+
+  uint256 public validatorThreshold = 10;
+  uint256 public maxStakeDrop = 95; // in percent 100-x, current is 5%
+  uint256 public minLockInPeriod = 2; // unit: dynasty
+  uint256 public totalStaked = 0;
   uint256 public currentEpoch = 1;
-  uint256 public totalEpoch;
 
-  //Todo: dynamically update
-  uint256 public minStakeAmount = 1;  // ETH
-  uint256 public minLockInPeriod = 100; //(unit epochs)
-  uint256 public stakingIdCount = 0;  // just a counter/index to map it with PQ w/address
-
-  enum ValidatorStatus { WAITING, VALIDATOR, UNSTAKING } // need update 
+  AvlTree validatorList;
 
   struct Staker {
-    uint256 epoch;  // init 0 
+    uint256 epoch;
     uint256 amount;
-    bytes data;
-    ValidatorStatus status;
-    uint256 stakingId; 
+    uint256 activationEpoch;
+    uint256 deactivationEpoch;
+    address signer;
   }
 
-  address[] exiterList;
-  address[] stakersList;
+  // signer to Staker mapping
+  mapping (address => address) public signerToStaker;
 
-  mapping (address => Staker) stakers; 
-  mapping (uint256 => address) stakingIdToAddress;
+  mapping (address => Staker) public stakers;
 
-  constructor(address _token) public {
-    require(_token != 0x0);
-    tokenObj = ERC20(_token);
-    stakeQueue = new PriorityQueue();
+  struct State {
+    int256 amount;
+    int256 stakerCount;
+  }
+  //Mapping for epoch to totalStake for that epoch
+  mapping (uint256 => State) public validatorState;
+
+  constructor () public {
+    validatorList = new AvlTree(); // TODO: bind with stakemanager
   }
 
   // only staker
@@ -69,200 +81,220 @@ contract StakeManager is StakeManagerInterface, RootChainable, Lockable {
     _;
   }
 
-  
-  function _priority(address user, uint256 amount, bytes data) private view returns (uint256) {
-    // return amount.mul(10).add(currentEpoch.mul(1000).add(amount.mul(100).div(user.balance)));
-    return amount;
+  function stake(address unstakeValidator, address signer, uint256 amount) public {
+    stakeFor(msg.sender, unstakeValidator, signer, amount);
   }
 
-  function stake(uint256 amount, bytes data) public {
-    // no second time staking 
-    // maybe restrict entry after n staker
-    require(stakers[msg.sender].epoch == 0);
-    stakeFor(msg.sender, amount, data);
-  }
+  function stakeFor(address user, address unstakeValidator, address signer, uint256 amount) public onlyWhenUnlocked {
+    require(stakers[user].epoch == 0, "No second time staking");
+    // currentValidatorSetSize*2 means everyone is commited
+    require(validatorThreshold*2 > validatorList.currentSize(), "Validator set full");
+    require(amount < MAX_UINT96, "Stay realistic!!");
 
-  function stakeFor(address user, uint256 amount, bytes data) public onlyWhenUnlocked {
-    require(amount >= minStakeAmount); 
+    require(signer != address(0x0) && signerToStaker[signer] == address(0x0));
 
-    // transfer tokens to stake manager
-    require(tokenObj.transferFrom(user, address(this), amount));
-    
-    // update total stake
-    totalStake = totalStake.add(amount);
-
-    stakers[user] = Staker(
-      currentEpoch,
-      amount,
-      data,
-      ValidatorStatus.WAITING,
-      stakingIdCount );
-
-    stakingIdToAddress[stakingIdCount] = user;
-    
-    uint256 priority = _priority(user, amount, data);
-    stakeQueue.insert(priority, stakingIdCount);
-    stakersList.push(user);
-    
-    stakingIdCount.add(1);
-    
-    emit Staked(user, amount, totalStake, data);
-  }
-  
-  // returns validators
-  function updateValidatorSet() public onlyRootChain {
-    // add condition for currentSize of PQ
-    currentEpoch = currentEpoch.add(1);
-   
-    // lazy unstake with epoch validation
-    for (uint256 i = 0; i < exiterList.length; i++) {
-      address exiter = exiterList[i];
-      
-      if (stakers[exiter].status == ValidatorStatus.UNSTAKING && (
-        currentEpoch.sub(stakers[exiter].epoch)) <= minLockInPeriod ) {
-          
-        require(tokenObj.transfer(exiter, stakers[exiter].amount));
-        totalStake = totalStake.sub(stakers[exiter].amount);
-        emit Unstaked(exiter, stakers[exiter].amount, totalStake, "0");
-        delete stakers[exiter];
-
-        //delete from exiter list
-        exiterList[i] = exiterList[exiterList.length - 1]; 
-        delete exiterList[exiterList.length - 1]; 
-        // Todo: delete from staker list
-        // stakersList[] = stakersList[] delete index 
-      }
+    uint256 minValue = validatorList.getMin();
+    if (minValue != 0) {
+      minValue = minValue >> 160;
+      minValue = minValue.mul(maxStakeDrop).div(100);
     }
-    
-    address validator;
-    // add previous validators to priority queue
-    for (i = 0; i < validatorSet.validators.length; i++) {
-      validator = validatorSet.validators[i];
-      if (stakers[validator].status != ValidatorStatus.UNSTAKING) {
-        uint256 priority = _priority(validator, stakers[validator].amount, stakers[validator].data);
-        stakeQueue.insert(priority, stakingIdCount);
-        stakingIdToAddress[stakingIdCount] = validator;
-        stakingIdCount.add(1);
-      }
+    minValue = Math.max(minValue, MIN_DEPOSIT_SIZE);
+
+    require(amount >= minValue, "Stake should be gt then X% of current lowest");
+    require(token.transferFrom(msg.sender, address(this), amount), "Transfer stake");
+    totalStaked = totalStaked.add(amount);
+
+    stakers[user] = Staker({
+      epoch: currentEpoch,
+      amount: amount,
+      activationEpoch: 0,
+      deactivationEpoch: 0,
+      signer: signer
+    });
+
+    signerToStaker[signer] = user;
+
+    // 96bits amount(10^29) 160 bits user address
+    uint256 value = amount << 160 | uint160(user);
+    validatorList.insert(value);
+
+    // for empty slot address(0x0) is validator
+    if (uint256(validatorState[currentEpoch].stakerCount) < validatorThreshold) {
+      stakers[user].activationEpoch = currentEpoch;
+      validatorState[currentEpoch].amount += int256(amount);
+      validatorState[currentEpoch].stakerCount += int256(1);
+    } else {
+      require(stakers[unstakeValidator].epoch != 0);
+      require(stakers[unstakeValidator].activationEpoch != 0 && stakers[unstakeValidator].deactivationEpoch == 0);
+      require(stakers[user].amount > stakers[unstakeValidator].amount);
+      value = stakers[unstakeValidator].amount << 160 | uint160(unstakeValidator);
+      uint256 dPlusTwo = currentEpoch.add(dynasty.mul(2));
+      stakers[unstakeValidator].deactivationEpoch = dPlusTwo;
+      stakers[user].activationEpoch = dPlusTwo;
+
+      validatorState[dPlusTwo].amount = (
+        validatorState[dPlusTwo].amount +
+        int256(amount) - int256(stakers[unstakeValidator].amount)
+      );
+      emit UnstakeInit(unstakeValidator, stakers[unstakeValidator].amount, dPlusTwo);
     }
-
-    require(stakeQueue.currentSize() >= _validatorThreshold); 
-    validatorSet = new ValidatorSet();
-    uint256 stakerId;
-      
-    for (uint256 i = 0; i < _validatorThreshold; i++) {
-      ( , stakerId) = stakeQueue.delMin();
-      validator = stakingIdToAddress[stakerId];
-      stakers[validator].status = ValidatorStatus.VALIDATOR;
-      validatorSet.addValidator(validator, stakers[validator].amount);
-      delete stakingIdToAddress[stakerId];
-    }
-    totalEpoch = currentEpoch.add(ValidatorSet.totalPower.div(
-      ValidatorSet.lowestPower).mul(_validatorThreshold));
-    
-    emit NewValidatorSet(_validatorThreshold, validatorSet.totalVotingPower, "0");
+    emit Staked(user, signer, stakers[user].activationEpoch, amount, totalStaked);
   }
 
-  function unstake(uint256 amount, bytes data) public onlyStaker { // onlyownder
-    require(stakers[msg.sender].epoch != 0); 
-    require(stakers[msg.sender].amount == amount);
-    
-    stakers[msg.sender].status = ValidatorStatus.UNSTAKING;
-    exiterList.push(msg.sender); 
-    
-    emit UnstakeInit(msg.sender, amount, totalStake.sub(amount), "0");
-  }
-  
-  function selectProposer() public onlyRootChain returns(address) {
-    return validatorSet.selectProposer();
+  function unstake() public onlyStaker {
+    require(stakers[msg.sender].activationEpoch > 0 && stakers[msg.sender].deactivationEpoch == 0);
+    uint256 amount = stakers[msg.sender].amount;
+
+    uint256 exitEpoch = currentEpoch.add(dynasty.mul(2));
+    stakers[msg.sender].deactivationEpoch = exitEpoch;
+
+    //update future
+    validatorState[exitEpoch].amount = (
+      validatorState[exitEpoch].amount - int256(amount));
+    validatorState[exitEpoch].stakerCount = (
+      validatorState[exitEpoch].stakerCount - 1);
+
+    emit UnstakeInit(msg.sender, amount, exitEpoch);
   }
 
+  function unstakeClaim() public onlyStaker {
+    // can only claim stake back after WITHDRAWAL_DELAY
+    require(stakers[msg.sender].deactivationEpoch.add(WITHDRAWAL_DELAY) <= currentEpoch);
+    uint256 amount = stakers[msg.sender].amount;
+    totalStaked = totalStaked.sub(amount);
+
+    validatorList.deleteNode(amount << 160 | uint160(msg.sender));
+    // TODO :add slashing here use soft slashing in slash amt variable
+
+    delete signerToStaker[stakers[msg.sender].signer];
+    delete stakers[msg.sender];
+
+    require(token.transfer(msg.sender, amount));
+    emit Unstaked(msg.sender, amount, totalStaked);
+  }
+
+  // returns valid validator for current epoch
   function getCurrentValidatorSet() public view returns (address[]) {
-    address[] memory validators = new address[](validatorSet.validators.length); 
-    for (uint256 i = 0; i<validatorSet.validators.length; i++) {
-      validators[i] = validatorSet.validators[i].validator;
+    address[] memory _validators = validatorList.getTree();
+    for (uint256 i = 0;i < _validators.length;i++) {
+      if (!isValidator(_validators[i])) {
+        delete _validators[i];
+      }
     }
-    return validators;
+    return _validators;
   }
 
-  function totalStakedFor(address addr) public view returns (uint256) { // onlyowner ?
-    require(stakers[addr]!=address(0x0));
+  function getStakerDetails(address user) public view returns(uint256, uint256, uint256, address) {
+    return (
+      stakers[user].amount,
+      stakers[user].activationEpoch,
+      stakers[user].deactivationEpoch,
+      stakers[user].signer
+      );
+  }
+
+  function totalStakedFor(address addr) public view returns (uint256) {
+    require(addr != address(0x0));
     return stakers[addr].amount;
-  }
-
-  function totalStaked() public view returns (uint256) {
-    return totalStake;
-  }
-
-  function token() public view returns (address) {
-    return address(tokenObj);
   }
 
   function supportsHistory() public pure returns (bool) {
     return false;
   }
   
-  function validatorThreshold() public view returns (uint256) {
-    return _validatorThreshold;
+  // set staking Token
+  function setToken(address _token) public onlyOwner {
+    require(_token != address(0x0));
+    token = ERC20(_token);
   }
 
   // Change the number of validators required to allow a passed header root
-  function updateValidatorThreshold(uint256 newThreshold) public onlyRootChain {
-    emit ThresholdChange(newThreshold, _validatorThreshold);
-    _validatorThreshold = newThreshold;
+  function updateValidatorThreshold(uint256 newThreshold) public onlyOwner {
+    require(newThreshold > 0);
+    emit ThresholdChange(newThreshold, validatorThreshold);
+    validatorThreshold = newThreshold;
   }
 
-  function finalizeCommit() public onlyRootChain { 
-    // if dynasty 
-    if(totalEpoch == currentEpoch) {
-      updateValidatorSet();
-    }
-    selectProposer();
-
+  function updateDynastyValue(uint256 newDynasty) public onlyOwner {
+    require(newDynasty > 0);
+    emit DynastyValueChange(newDynasty, dynasty);
+    dynasty = newDynasty;
   }
 
-  function updateMinStakeAmount(uint256 amount) public onlyRootChain {
-    minStakeAmount = amount;
+  function updateSigner(address _signer) public onlyStaker {
+    require(_signer != address(0x0) && signerToStaker[_signer] == address(0x0));
+
+    // update signer event
+    emit SignerChange(msg.sender, stakers[msg.sender].signer, _signer);
+
+    delete signerToStaker[stakers[msg.sender].signer];
+    signerToStaker[_signer] = msg.sender;
+    stakers[msg.sender].signer = _signer;
   }
 
-  function updateMinLockInPeriod(uint256 epochs) public onlyRootChain {
+  function finalizeCommit() public onlyRootChain {
+    uint256 nextEpoch = currentEpoch.add(1);
+    // update totalstake and validator count
+    validatorState[nextEpoch].amount = (
+      validatorState[currentEpoch].amount + validatorState[nextEpoch].amount
+    );
+    validatorState[nextEpoch].stakerCount = (
+      validatorState[currentEpoch].stakerCount + validatorState[nextEpoch].stakerCount
+    );
+
+    currentEpoch = nextEpoch;
+    // erase old data/history
+    delete validatorState[currentEpoch.sub(1)];
+  }
+
+  function updateMinLockInPeriod(uint256 epochs) public onlyOwner {
     minLockInPeriod = epochs;
   }
 
-  // need changes 
-  function getProposer()  public view returns (address) {
-    return validatorSet.proposer();
+  function currentValidatorSetSize() public view returns (uint256) {
+    return uint256(validatorState[currentEpoch].stakerCount);
   }
 
-  function checkSignatures(
-    bytes32 root,
-    uint256 start,
-    uint256 end,
-    bytes sigs
-  ) public view returns (bool) {
-    // create hash
-    bytes32 h = keccak256(
-      abi.encodePacked(
-        RootChain(rootChain).chain(), root, start, end
-      )
+  function currentValidatorSetTotalStake() public view returns (uint256) {
+    return uint256(validatorState[currentEpoch].amount);
+  }
+
+  function isValidator(address user) public view returns (bool) {
+    return (
+      stakers[user].amount > 0 &&
+      (stakers[user].activationEpoch != 0 &&
+      stakers[user].activationEpoch <= currentEpoch ) &&
+      (stakers[user].deactivationEpoch == 0 ||
+      stakers[user].deactivationEpoch >= currentEpoch)
     );
+  }
 
-    // total signers
-    uint256 totalSigners = 0;
+  function checkSignatures (
+    bytes32 voteHash,
+    bytes sigs
+  ) public view onlyRootChain returns (bool)  {
+    // total voting power
+    uint256 stakePower = 0;
+    address user;
 
-    address lastAdd = address(0x0); // cannot have address(0) as an owner
+    address lastAdd = address(0x0); // cannot have address(0x0) as an owner
     for (uint64 i = 0; i < sigs.length; i += 65) {
       bytes memory sigElement = BytesLib.slice(sigs, i, 65);
-      address signer = h.ecrecovery(sigElement);
+      address signer = voteHash.ecrecovery(sigElement);
 
+      user = signerToStaker[signer];
       // check if signer is stacker and not proposer
-      if (totalStakedFor(signer) > 0 && signer != getProposer() && signer > lastAdd) {
+      if (
+        isValidator(user) &&
+        signer > lastAdd
+      ) {
         lastAdd = signer;
-        totalSigners++;
+        stakePower = stakePower.add(stakers[user].amount); 
       } else {
         break;
       }
     }
-    return totalSigners >= _validatorThreshold.mul(2).div(3).add(1);
+    return stakePower >= currentValidatorSetTotalStake().mul(2).div(3).add(1);
   }
+
 }
