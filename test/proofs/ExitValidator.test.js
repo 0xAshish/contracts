@@ -5,9 +5,11 @@ import utils from 'ethereumjs-util'
 
 import {
   WithdrawManagerMock,
+  DepositManagerMock,
+  RootChainMock,
   RootToken,
   ChildChain,
-  ChildToken,
+  ChildERC20,
   ExitNFT,
   ExitValidator
 } from '../helpers/contracts'
@@ -37,7 +39,7 @@ const web3Child = new web3.constructor(
 )
 
 ChildChain.web3 = web3Child
-ChildToken.web3 = web3Child
+ChildERC20.web3 = web3Child
 
 contract('ExitValidator', async function(accounts) {
   describe('exit validation', async function() {
@@ -66,10 +68,13 @@ contract('ExitValidator', async function(accounts) {
       let childChain
       let childToken
       let exitNFTContract
+      let rootChain
+      let depositManager
 
       let receivedTx
       let exitId
       let exitValidator
+      let owner = accounts[0]
 
       // transfer after exit
       let transferReceipt
@@ -79,8 +84,6 @@ contract('ExitValidator', async function(accounts) {
 
       before(async function() {
         // withdraw manager
-        withdrawManager = await WithdrawManagerMock.new()
-        childBlockInterval = await withdrawManager.CHILD_BLOCK_INTERVAL()
 
         // root token / child chain / child token
         rootToken = await RootToken.new('Root Token', 'ROOT')
@@ -88,26 +91,65 @@ contract('ExitValidator', async function(accounts) {
 
         // child chain
         childChain = await ChildChain.new()
-        const receipt = await childChain.addToken(rootToken.address, 18)
-        childToken = ChildToken.at(receipt.logs[0].args.token)
+        const receipt = await childChain.addToken(
+          rootToken.address,
+          'Token Test',
+          'TEST',
+          18,
+          false
+        )
+        childToken = ChildERC20.at(receipt.logs[1].args.token)
 
         // exit validator
         exitValidator = await ExitValidator.new()
+        rootChain = await RootChainMock.new()
+        depositManager = await DepositManagerMock.new({ from: owner })
+        withdrawManager = await WithdrawManagerMock.new({ from: owner })
 
-        // map token
-        await withdrawManager.mapToken(rootToken.address, childToken.address)
+        await exitValidator.changeRootChain(rootChain.address, { from: owner })
+
+        childBlockInterval = await withdrawManager.CHILD_BLOCK_INTERVAL()
+
+        await depositManager.changeRootChain(rootChain.address, { from: owner })
+        await withdrawManager.changeRootChain(rootChain.address, {
+          from: owner
+        })
+        await exitValidator.setWithdrawManager(withdrawManager.address)
+
+        await rootChain.setDepositManager(depositManager.address, {
+          from: owner
+        })
+        await rootChain.setWithdrawManager(withdrawManager.address, {
+          from: owner
+        })
+
+        await rootChain.addProofValidator(exitValidator.address, {
+          from: owner
+        })
+
         // set exit NFT
         await withdrawManager.setExitNFTContract(exitNFTContract.address)
         // set withdraw manager as root chain for exit NFT
-        await exitNFTContract.changeRootChain(withdrawManager.address)
-        // exit validator
-        await exitValidator.changeRootChain(withdrawManager.address)
+
+        await exitValidator.setDepositManager(depositManager.address)
+        // set exit NFT
+        await withdrawManager.setDepositManager(depositManager.address)
+        // set withdraw manager as root chain for exit NFT
+
+        await exitNFTContract.changeRootChain(withdrawManager.address, {
+          from: owner
+        })
+
+        // map token
+        await rootChain.mapToken(rootToken.address, childToken.address, false, {
+          from: owner
+        })
       })
 
       it('should allow user to deposit tokens', async function() {
         // transfer tokens
         await rootToken.mint(accounts[1], amount)
-        await rootToken.transfer(withdrawManager.address, amount, {
+        await rootToken.transfer(rootChain.address, amount, {
           from: accounts[1]
         })
 
@@ -152,7 +194,7 @@ contract('ExitValidator', async function(accounts) {
         const headerNumber = +childBlockInterval
 
         // set header block (mocking header block)
-        await withdrawManager.setHeaderBlock(
+        await rootChain.setHeaderBlock(
           headerNumber,
           headerRoot,
           start,
@@ -214,9 +256,9 @@ contract('ExitValidator', async function(accounts) {
         // set tokenId
         exitLogs[0].event.should.equal('Transfer')
         exitLogs[0].address.should.equal(exitNFTContract.address)
-        exitLogs[0].args._to.toLowerCase().should.equal(user)
+        exitLogs[0].args.to.toLowerCase().should.equal(user)
 
-        exitId = exitLogs[0].args._tokenId.toString()
+        exitId = exitLogs[0].args.tokenId.toString()
 
         exitLogs[1].event.should.equal('ExitStarted')
         exitLogs[1].address.should.equal(withdrawManager.address)
@@ -249,7 +291,7 @@ contract('ExitValidator', async function(accounts) {
         const headerNumber = +childBlockInterval * 5
 
         // set header block (mocking header block)
-        await withdrawManager.setHeaderBlock(
+        await rootChain.setHeaderBlock(
           headerNumber,
           headerRoot,
           start,
@@ -294,9 +336,9 @@ contract('ExitValidator', async function(accounts) {
 
         const logs = logDecoder.decodeLogs(challengeReceipt.receipt.logs)
         logs.should.have.lengthOf(1)
-        logs[0].args._from.toLowerCase().should.equal(accounts[9])
-        logs[0].args._to.should.equal(ZeroAddress)
-        logs[0].args._tokenId.should.be.bignumber.equal(exitId)
+        logs[0].args.from.toLowerCase().should.equal(accounts[9])
+        logs[0].args.to.should.equal(ZeroAddress)
+        logs[0].args.tokenId.should.be.bignumber.equal(exitId)
       })
 
       it('should pass (added for sanity)', async function() {

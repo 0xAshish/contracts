@@ -6,7 +6,7 @@ import { RLP } from "../lib/RLP.sol";
 import { BytesLib } from "../lib/BytesLib.sol";
 
 import { RootChainValidator } from "../mixin/RootChainValidator.sol";
-import { RootChain } from "../root/RootChain.sol";
+import { IRootChain } from "../root/IRootChain.sol";
 
 
 contract DepositValidator is RootChainValidator {
@@ -19,10 +19,8 @@ contract DepositValidator is RootChainValidator {
   bytes4 constant public DEPOSIT_TOKENS_SIGNATURE = 0x487cda0d;
   // keccak256('TokenDeposited(address,address,address,uint256,uint256)')
   bytes32 constant public TOKEN_DEPOSITED_EVENT_SIGNATURE = 0xec3afb067bce33c5a294470ec5b29e6759301cd3928550490c6d48816cdc2f5d;
-  // keccak256('Deposit(address,address,uint256)')
-  bytes32 constant public DEPOSIT_EVENT_SIGNATURE = 0x5548c837ab068cf56a2c2479df0882a4922fd203edb7517321831d95078c5f62;
-  // keccak256('LogDeposit(address,address,uint256,uint256,uint256)')
-  bytes32 constant public LOG_DEPOSIT_EVENT_SIGNATURE = 0xab14747d46633612ff5c029a3117f98ffb6506ebf31bab40972f911b7dd18891;
+  // keccak256('Deposit(address,address,uint256,uint256,uint256)')
+  bytes32 constant public DEPOSIT_EVENT_SIGNATURE = 0x4e2ca0515ed1aef1395f66b5303bb5d6f1bf9d61a353fa53f73f8ac9973fa9f6;
 
   // validate deposit
   function validateDepositTx(
@@ -53,7 +51,7 @@ contract DepositValidator is RootChainValidator {
 
     // actual validation
     if (!_validateDepositTx(txData[7].toData(), txData[9].toData())) {
-      RootChain(rootChain).slash();
+      IRootChain(rootChain).slash();
     }
   }
 
@@ -88,7 +86,7 @@ contract DepositValidator is RootChainValidator {
     bytes memory dataField = items[5].toData(); // fetch data field
     // check if `to` field is child root contract and see if tx is deposit tx
     require(
-      RootChain(rootChain).childChainContract() == items[3].toAddress() &&
+      childChainContract == items[3].toAddress() &&
       BytesLib.toBytes4(BytesLib.slice(dataField, 0, 4)) == DEPOSIT_TOKENS_SIGNATURE
     );
     uint256 depositCount1 = BytesLib.toUint(dataField, 100); // store depositCount from tx1
@@ -122,13 +120,13 @@ contract DepositValidator is RootChainValidator {
     items = txBytes.toRLPItem().toList();
     dataField = items[5].toData();
     require(
-      RootChain(rootChain).childChainContract() == items[3].toAddress() &&
+      childChainContract == items[3].toAddress() &&
       keccak256(BytesLib.slice(dataField, 0, 4)) == DEPOSIT_TOKENS_SIGNATURE
     );
 
     // check if both depositCounts are same
     if (BytesLib.toUint(dataField, 100) == depositCount1) {
-      RootChain(rootChain).slash();
+      IRootChain(rootChain).slash();
       return;
     }
 
@@ -147,7 +145,7 @@ contract DepositValidator is RootChainValidator {
     require(items.length == 9);
 
     // check if `to` field is child root contract
-    require(RootChain(rootChain).childChainContract() == items[3].toAddress());
+    require(childChainContract == items[3].toAddress());
 
     // check if transaction is depositTokens tx
     // <4 bytes depositTokens signature, root token address(32 bytes), user address (32 bytes), amount (32 bytes), depositCount (32 bytes)>
@@ -163,7 +161,7 @@ contract DepositValidator is RootChainValidator {
     address depositor = BytesLib.toAddress(dataField, 48);
     uint256 amount = BytesLib.toUint(dataField, 68);
     uint256 depositCount = BytesLib.toUint(dataField, 100);
-    address childToken = RootChain(rootChain).tokens(rootToken);
+    address childToken = depositManager.tokens(rootToken);
 
     // get receipt data
     items = receiptData.toRLPItem().toList();
@@ -185,8 +183,7 @@ contract DepositValidator is RootChainValidator {
       items.length == 4 &&
       items[3].toList().length == 3 &&
       _validateDataField(depositCount, rootToken, depositor, amount) &&
-      _validateDepositEvent(items[3].toList()[0].toList(), rootToken, childToken, depositor, amount) &&
-      _validateLogDepositEvent(items[3].toList()[1].toList(), rootToken, childToken, depositor, amount) &&
+      _validateDepositEvent(items[3].toList()[1].toList(), rootToken, childToken, depositor, amount) &&
       _validateTokenDepositedEvent(items[3].toList()[2].toList(), rootToken, childToken, depositor, amount)
     ) {
       return true;
@@ -206,7 +203,7 @@ contract DepositValidator is RootChainValidator {
     uint256 _amount;
 
     // fetch deposit block
-    (,_rootToken, _depositor, _amount,) = RootChain(rootChain).depositBlock(depositCount);
+    (,_rootToken, _depositor, _amount,) = IRootChain(rootChain).depositBlock(depositCount);
 
     if (
       _rootToken == rootToken &&
@@ -231,35 +228,9 @@ contract DepositValidator is RootChainValidator {
 
     RLP.RLPItem[] memory topics = items[1].toList();
     if (
-      topics.length == 3 &&
-      items[0].toAddress() == childToken &&
-      topics[0].toBytes32() == DEPOSIT_EVENT_SIGNATURE &&
-      BytesLib.toAddress(topics[1].toData(), 12) == rootToken &&
-      BytesLib.toAddress(topics[2].toData(), 12) == depositor &&
-      BytesLib.toUint(items[2].toData(), 0) == amount
-    ) {
-      return true;
-    }
-
-    return false;
-  }
-
-  function _validateLogDepositEvent(
-    RLP.RLPItem[] items,
-    address rootToken,
-    address childToken,
-    address depositor,
-    uint256 amount
-  ) internal returns (bool) {
-    if (items.length != 3) {
-      return false;
-    }
-
-    RLP.RLPItem[] memory topics = items[1].toList();
-    if (
       topics.length == 1 &&
       items[0].toAddress() == childToken &&
-      topics[0].toBytes32() == LOG_DEPOSIT_EVENT_SIGNATURE &&
+      topics[0].toBytes32() == DEPOSIT_EVENT_SIGNATURE &&
       BytesLib.toUint(items[2].toData(), 0) == amount &&
       BytesLib.toUint(items[2].toData(), 32).add(amount) == BytesLib.toUint(items[2].toData(), 64)
     ) {
@@ -283,7 +254,7 @@ contract DepositValidator is RootChainValidator {
     RLP.RLPItem[] memory topics = items[1].toList();
     if (
       topics.length == 4 &&
-      items[0].toAddress() == RootChain(rootChain).childChainContract() &&
+      items[0].toAddress() == childChainContract &&
       topics[0].toBytes32() == TOKEN_DEPOSITED_EVENT_SIGNATURE &&
       BytesLib.toAddress(topics[1].toData(), 12) == rootToken &&
       BytesLib.toAddress(topics[2].toData(), 12) == childToken &&

@@ -5,13 +5,23 @@ import { SafeMath } from "openzeppelin-solidity/contracts/math/SafeMath.sol";
 
 import { Common } from "../lib/Common.sol";
 
+import { RootChainable } from "../mixin/RootChainable.sol";
 import { WETH } from "../token/WETH.sol";
 import { TokenManager } from "./TokenManager.sol";
-import { IRootChain } from "./IRootChain.sol";
+import { IManager } from "./IManager.sol";
 
 
-contract DepositManager is IRootChain, TokenManager {
+contract DepositManager is IManager, TokenManager, RootChainable {
   using SafeMath for uint256;
+
+  // deposit block
+  struct DepositBlock {
+    uint256 header;
+    address owner;
+    address token;
+    uint256 amountOrTokenId; // needs better name
+    uint256 createdAt;
+  }
 
   // list of deposits
   mapping(uint256 => DepositBlock) public deposits;
@@ -23,39 +33,49 @@ contract DepositManager is IRootChain, TokenManager {
   // Events
   //
 
-  event Deposit(address indexed _user, address indexed _token, uint256 _amount, uint256 _depositCount);
+  event Deposit(address indexed _user, address indexed _token, uint256 _amountOrTokenId, uint256 _depositCount);
 
   //
-  // External functions
+  // Constructor
   //
 
-  /**
-   * @dev Accept ERC223 compatible tokens
-   * @param _user address The address that is transferring the tokens
-   * @param _amount uint256 the amount of the specified token
-   * @param _data Bytes The data passed from the caller.
-   */
-  function tokenFallback(address _user, uint256 _amount, bytes _data) external {
-    address _token = msg.sender;
-
-    // create deposit block with token fallback
-    _createDepositBlock(_token, _user, _amount);
+  constructor() {
+    // reset deposit count
+    depositCount = 1;
   }
 
   //
   // Public functions
   //
 
+  // set Exit NFT contract
+  function setExitNFTContract(address _nftContract) public onlyRootChain {}
+
+  // set WETH token
+  function setWETHToken(address _token) public onlyRootChain {
+    wethToken = _token;
+  }
+
+  // map child token to root token
+  function mapToken(address _rootToken, address _childToken, bool _isERC721) public onlyRootChain {
+    _mapToken(_rootToken, _childToken, _isERC721);
+  }
+
+  // finalize commit when new header block commited
+  function finalizeCommit(uint256 _currentHeaderBlock) public onlyRootChain {
+    depositCount = 1;
+  }
+
   // Get next deposit block
-  function nextDepositBlock() public view returns (uint256) {
-    return currentHeaderBlock().sub(CHILD_BLOCK_INTERVAL).add(depositCount);
+  function nextDepositBlock(uint256 currentHeaderBlock) public view returns (uint256) {
+    return currentHeaderBlock.sub(CHILD_BLOCK_INTERVAL).add(depositCount);
   }
 
   function depositBlock(uint256 _depositCount) public view returns (
     uint256 _header,
     address _owner,
     address _token,
-    uint256 _amount,
+    uint256 _amountOrTokenId,
     uint256 _createdAt
   ) {
     DepositBlock memory _depositBlock = deposits[_depositCount];
@@ -63,56 +83,22 @@ contract DepositManager is IRootChain, TokenManager {
     _header = _depositBlock.header;
     _owner = _depositBlock.owner;
     _token = _depositBlock.token;
-    _amount = _depositBlock.amount;
+    _amountOrTokenId = _depositBlock.amountOrTokenId;
     _createdAt = _depositBlock.createdAt;
   }
 
-  // deposit ethers
-  function depositEthers(
-    address _user
-  ) public payable {
-    // retrieve ether amount
-    uint256 _amount = msg.value;
-
-    // transfer ethers to this contract (through WETH)
-    WETH t = WETH(wethToken);
-    t.deposit.value(_amount)();
-
-    // generate deposit block and udpate counter
-    _createDepositBlock(wethToken, _user, _amount);
-  }
-
-  // deposit tokens for another user
-  function deposit(
+  // create deposit block and
+  function createDepositBlock(
+    uint256 _currentHeaderBlock,
     address _token,
     address _user,
-    uint256 _amount
-  ) public {
-    // transfer tokens to current contract
-    require(ERC20(_token).transferFrom(msg.sender, address(this), _amount));
-
-    // generate deposit block and udpate counter
-    _createDepositBlock(_token, _user, _amount);
-  }
-
-  //
-  // Internal functions
-  //
-
-  // Deposit block getter
-  function getDepositBlock(uint256 _depositCount) internal view returns (
-    DepositBlock _depositBlock
-  ) {
-    _depositBlock = deposits[_depositCount];
-  }
-
-  // create deposit block and
-  function _createDepositBlock(address _token, address _user, uint256 _amount) internal {
+    uint256 _amountOrTokenId
+  ) public onlyRootChain {
     // throw if user is contract
     require(Common.isContract(_user) == false);
 
-    // throw if amount is zero
-    require(_amount > 0);
+    // throw if amount is zero if !NFT
+    require(isERC721[_token] || _amountOrTokenId > 0); 
 
     // throws if token is not mapped
     require(_isTokenMapped(_token));
@@ -121,22 +107,19 @@ contract DepositManager is IRootChain, TokenManager {
     require(depositCount < CHILD_BLOCK_INTERVAL);
 
     // get deposit id
-    uint256 _depositId = nextDepositBlock();
+    uint256 _depositId = nextDepositBlock(_currentHeaderBlock);
 
     // broadcast deposit event
-    emit Deposit(_user, _token, _amount, _depositId);
+    emit Deposit(_user, _token, _amountOrTokenId, _depositId);
 
     // add deposit into deposits
-    DepositBlock memory _depositBlock = DepositBlock({
-      header: currentHeaderBlock(),
+    deposits[_depositId] = DepositBlock({
+      header: _currentHeaderBlock,
       owner: _user,
       token: _token,
-      amount: _amount,
+      amountOrTokenId: _amountOrTokenId,
       createdAt: block.timestamp
     });
-
-    deposits[_depositId] = _depositBlock;
-
     // increase deposit counter
     depositCount = depositCount.add(1);
   }

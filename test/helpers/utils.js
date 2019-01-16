@@ -49,13 +49,14 @@ export async function linkLibs(web3Child) {
     contracts.MaticWETH,
     contracts.StakeManagerMock,
     contracts.TokenManagerMock,
-    contracts.IRootChainMock,
+    contracts.RootChainMock,
     contracts.DepositManagerMock,
     contracts.WithdrawManagerMock,
     contracts.TxValidator,
     contracts.ExitValidator,
     contracts.ERC20Validator,
-    contracts.ERC20ValidatorMock
+    contracts.ERC20ValidatorMock,
+    contracts.ERC721ValidatorMock
   ]
 
   const libAddresses = {}
@@ -76,7 +77,11 @@ export async function linkLibs(web3Child) {
 
   // web3Child
   if (web3Child) {
-    const childContractList = [contracts.ChildChain, contracts.ChildToken]
+    const childContractList = [
+      contracts.ChildChain,
+      contracts.ChildERC20,
+      contracts.ChildERC721
+    ]
     let i
     for (i = 0; i < libList.length; i++) {
       const M = libList[i]
@@ -91,25 +96,17 @@ export async function linkLibs(web3Child) {
   }
 }
 
-export function getSigs(wallets, _chain, _root, _start, _end, exclude = []) {
+export function getSigs(wallets, votedata) {
   wallets.sort((w1, w2) => {
-    return Buffer.compare(w1.getAddress(), w2.getAddress()) >= 0
+    return w1.getAddressString().localeCompare(w2.getAddressString())
   })
 
-  let chain = utils.toBuffer(_chain)
-  let start = new BN(_start.toString()).toArrayLike(Buffer, 'be', 32)
-  let end = new BN(_end.toString()).toArrayLike(Buffer, 'be', 32)
-  let headerRoot = utils.toBuffer(_root)
-  const h = utils.toBuffer(
-    utils.sha3(Buffer.concat([chain, headerRoot, start, end]))
-  )
+  const h = utils.toBuffer(votedata)
 
   return wallets
     .map(w => {
-      if (exclude.indexOf(w.getAddressString()) === -1) {
-        const vrs = utils.ecsign(h, w.getPrivateKey())
-        return utils.toRpcSig(vrs.v, vrs.r, vrs.s)
-      }
+      const vrs = utils.ecsign(h, w.getPrivateKey())
+      return utils.toRpcSig(vrs.v, vrs.r, vrs.s)
     })
     .filter(d => d)
 }
